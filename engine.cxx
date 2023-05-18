@@ -2,6 +2,7 @@
 #include <SDL_init.h>
 #include <SDL_video.h>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdio>
@@ -9,11 +10,18 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <vector>
 
 #include "glad/glad.h"
+#include "stb_image.h"
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include "engine.hxx"
-
+namespace eng
+{
 #define OM_GL_CHECK()                                                          \
     {                                                                          \
         const int err = static_cast<int>(glGetError());                        \
@@ -52,28 +60,154 @@ callback_opengl_debug(GLenum                       source,
                       [[maybe_unused]] const void* userParam);
 
 bool already_exist = false;
-
-class engine_impl final : public eng::engine
+class CKeys
 {
-    SDL_Window*   window  = nullptr;
-    SDL_GLContext context = nullptr;
-    std::string   flag;
-    unsigned int  ID;
+    SDL_KeyCode key;
+    std::string name;
+    event       ev;
 
 public:
-    bool load_shader(std::string vertexPath, std::string fragmentPath) final;
+    CKeys() {}
+    CKeys(SDL_KeyCode k, std::string n, enum event e)
+        : key(k)
+        , name(n)
+        , ev(e)
+    {
+    }
+    SDL_KeyCode get_code() const { return this->key; }
+    std::string get_name() { return this->name; }
+    enum event  get_event() { return ev; }
+};
+struct Shader
+{
+    GLuint ID;
 
+    Shader(std::string vertexPath, std::string fragmentPath)
+    {
+        std::string   vertexCode;
+        std::string   fragmentCode;
+        std::ifstream vShaderFile;
+        std::ifstream fShaderFile;
+        // ensure ifstream objects can throw exceptions:
+        vShaderFile.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+        fShaderFile.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+        try
+        {
+            // open files
+            vShaderFile.open(vertexPath.c_str());
+            fShaderFile.open(fragmentPath.c_str());
+            std::stringstream vShaderStream, fShaderStream;
+            // read file’s buffer contents into streams
+            vShaderStream << vShaderFile.rdbuf();
+            fShaderStream << fShaderFile.rdbuf();
+            // close file handlers
+            vShaderFile.close();
+            fShaderFile.close();
+            // convert stream into string
+            vertexCode   = vShaderStream.str();
+            fragmentCode = fShaderStream.str();
+        }
+        catch (std::ifstream::failure e)
+        {
+            std::cout << "ERROR::SHADER::FILE_NOT_SUCCESFULLY_READ"
+                      << std::endl;
+        }
+        const char*  vShaderCode = vertexCode.c_str();
+        const char*  fShaderCode = fragmentCode.c_str();
+        unsigned int vertex, fragment;
+        int          success;
+        char         infoLog[512];
+        vertex = glCreateShader(GL_VERTEX_SHADER);
+
+        glShaderSource(vertex, 1, &vShaderCode, NULL);
+        glCompileShader(vertex);
+
+        glGetShaderiv(vertex, GL_COMPILE_STATUS, &success);
+
+        if (!success)
+        {
+            glGetShaderInfoLog(vertex, 512, NULL, infoLog);
+            std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n"
+                      << infoLog << std::endl;
+        };
+
+        fragment = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fragment, 1, &fShaderCode, NULL);
+        glCompileShader(fragment);
+        glGetShaderiv(fragment, GL_COMPILE_STATUS, &success);
+        if (!success)
+        {
+            glGetShaderInfoLog(vertex, 512, NULL, infoLog);
+            std::cout << "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n"
+                      << infoLog << std::endl;
+        };
+        ID = glCreateProgram();
+        glAttachShader(ID, vertex);
+        glAttachShader(ID, fragment);
+        glLinkProgram(ID);
+        glGetProgramiv(ID, GL_LINK_STATUS, &success);
+        if (!success)
+        {
+            glGetProgramInfoLog(ID, 512, NULL, infoLog);
+            std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n"
+                      << infoLog << std::endl;
+        }
+        glDeleteShader(vertex);
+        glDeleteShader(fragment);
+    }
+    void use() const { glUseProgram(ID); }
+
+    void setInt(const std::string& name, int value) const
+    {
+        glUniform1i(glGetUniformLocation(ID, name.c_str()), value);
+    }
+    // ------------------------------------------------------------------------
+    void setFloat(const std::string& name, float value) const
+    {
+        glUniform1f(glGetUniformLocation(ID, name.c_str()), value);
+    }
+    void setMat3(const std::string& name, const glm::mat3& mat) const
+    {
+        glUniformMatrix3fv(
+            glGetUniformLocation(ID, name.c_str()), 1, GL_FALSE, &mat[0][0]);
+    }
+    // ------------------------------------------------------------------------
+    void setMat4(const std::string& name, const glm::mat4& mat) const
+    {
+        glUniformMatrix4fv(
+            glGetUniformLocation(ID, name.c_str()), 1, GL_FALSE, &mat[0][0]);
+    }
+    void setVec3(const std::string& name, float x, float y, float z) const
+    {
+        glUniform3f(glGetUniformLocation(ID, name.c_str()), x, y, z);
+    }
+    void setVec4(
+        const std::string& name, float x, float y, float z, float w) const
+    {
+        glUniform4f(glGetUniformLocation(ID, name.c_str()), x, y, z, w);
+    }
+};
+class engine_impl final : public eng::engine
+{
+    SDL_Window*        window  = nullptr;
+    SDL_GLContext      context = nullptr;
+    std::string        flag;
+    std::vector<CKeys> binded_keys;
+    unsigned int       ID;
+
+public:
     bool initialize_engine() final;
 
-    void draw_triangle() final;
+    void draw_triangle(eng::triangle t1, eng::triangle t2) final;
 
-    void use_program()
-    {
-        glUseProgram(ID);
-        OM_GL_CHECK()
+    int load_texture(std::string path) final;
 
-        glEnable(GL_DEPTH_TEST);
-    }
+    bool draw_texture(eng::triangle t1,
+                      eng::triangle t2,
+                      int           texHandle,
+                      glm::mat4     transform) final;
+    bool get_input(event& e) final;
+    bool rebind_key() final;
     bool swap_buff() final
     {
         SDL_GL_SwapWindow(window);
@@ -85,7 +219,23 @@ public:
         return true;
     }
 };
-
+bool engine_impl::rebind_key()
+{
+    std::cout << "Choose key to rebind" << std::endl;
+    std::string key_name;
+    std::cin >> key_name;
+    auto it = std::find_if(binded_keys.begin(),
+                           binded_keys.end(),
+                           [&](CKeys& k) { return k.get_name() == key_name; });
+    if (it == binded_keys.end())
+    {
+        std::cout << "No such name" << std::endl;
+    }
+    SDL_KeyCode kc = (SDL_KeyCode)SDL_GetKeyFromName(it->get_name().c_str());
+    CKeys       new_key{ kc, key_name, it->get_event() };
+    binded_keys.erase(it);
+    binded_keys.push_back(new_key);
+}
 bool engine_impl::initialize_engine()
 {
     if (SDL_Init(SDL_INIT_VIDEO))
@@ -116,6 +266,15 @@ bool engine_impl::initialize_engine()
                                  NULL);
         return false;
     }
+    binded_keys = { { SDLK_w, "up", event::up },
+                    { SDLK_a, "left", event::left },
+                    { SDLK_s, "down", event::down },
+                    { SDLK_d, "right", event::right },
+                    { SDLK_LCTRL, "button_one", event::button_one },
+                    { SDLK_SPACE, "button_two", event::button_two },
+                    { SDLK_ESCAPE, "select", event::select },
+                    { SDLK_RETURN, "start", event::start } };
+
     context = SDL_GL_CreateContext(window);
     if (!context)
     {
@@ -158,90 +317,58 @@ bool engine_impl::initialize_engine()
     glDebugMessageControl(
         GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_TRUE);
     OM_GL_CHECK()
+    glEnable(GL_BLEND);
+    OM_GL_CHECK();
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    OM_GL_CHECK();
+    glViewport(0, 0, width, height);
     return true;
 }
-
-bool engine_impl::load_shader(std::string vertexPath, std::string fragmentPath)
+int engine_impl::load_texture(std::string path)
 {
-    std::string   vertexCode;
-    std::string   fragmentCode;
-    std::ifstream vShaderFile;
-    std::ifstream fShaderFile;
-    // ensure ifstream objects can throw exceptions:
-    vShaderFile.exceptions(std::ifstream::failbit | std::ifstream::badbit);
-    fShaderFile.exceptions(std::ifstream::failbit | std::ifstream::badbit);
-    try
-    {
-        // open files
-        vShaderFile.open(vertexPath.c_str());
-        fShaderFile.open(fragmentPath.c_str());
-        std::stringstream vShaderStream, fShaderStream;
-        // read file’s buffer contents into streams
-        vShaderStream << vShaderFile.rdbuf();
-        fShaderStream << fShaderFile.rdbuf();
-        // close file handlers
-        vShaderFile.close();
-        fShaderFile.close();
-        // convert stream into string
-        vertexCode   = vShaderStream.str();
-        fragmentCode = fShaderStream.str();
-    }
-    catch (std::ifstream::failure e)
-    {
-        std::cout << "ERROR::SHADER::FILE_NOT_SUCCESFULLY_READ" << std::endl;
-        return false;
-    }
-    const char*  vShaderCode = vertexCode.c_str();
-    const char*  fShaderCode = fragmentCode.c_str();
-    unsigned int vertex, fragment;
-    int          success;
-    char         infoLog[512];
-    vertex = glCreateShader(GL_VERTEX_SHADER);
-    OM_GL_CHECK()
-    glShaderSource(vertex, 1, &vShaderCode, NULL);
-    OM_GL_CHECK()
-    glCompileShader(vertex);
-    OM_GL_CHECK()
-    glGetShaderiv(vertex, GL_COMPILE_STATUS, &success);
-    OM_GL_CHECK()
-    if (!success)
-    {
-        glGetShaderInfoLog(vertex, 512, NULL, infoLog);
-        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n"
-                  << infoLog << std::endl;
-        return false;
-    };
+    int width, height, nrChannels;
+    stbi_set_flip_vertically_on_load(true);
+    unsigned char* data =
+        stbi_load(path.c_str(), &width, &height, &nrChannels, 0);
 
-    fragment = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragment, 1, &fShaderCode, NULL);
-    glCompileShader(fragment);
-    glGetShaderiv(fragment, GL_COMPILE_STATUS, &success);
-    if (!success)
+    unsigned int texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    if (data)
     {
-        glGetShaderInfoLog(vertex, 512, NULL, infoLog);
-        std::cout << "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n"
-                  << infoLog << std::endl;
-        return false;
-    };
-    ID = glCreateProgram();
-    glAttachShader(ID, vertex);
-    glAttachShader(ID, fragment);
-    glLinkProgram(ID);
-    glGetProgramiv(ID, GL_LINK_STATUS, &success);
-    if (!success)
+        glTexImage2D(GL_TEXTURE_2D,
+                     0,
+                     GL_RGBA,
+                     width,
+                     height,
+                     0,
+                     GL_RGBA,
+                     GL_UNSIGNED_BYTE,
+                     data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+    else
     {
-        glGetProgramInfoLog(ID, 512, NULL, infoLog);
-        std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n"
-                  << infoLog << std::endl;
+        std::cout << "Failed to load texture" << std::endl;
         return false;
     }
-    glDeleteShader(vertex);
-    glDeleteShader(fragment);
-    return true;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    OM_GL_CHECK()
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    OM_GL_CHECK()
+    stbi_image_free(data);
+    return texture;
 }
 
-void engine_impl::draw_triangle()
+void engine_impl::draw_triangle(eng::triangle t1, eng::triangle t2)
 {
+    Shader s("/home/apachai/CLionProjects/opengl_window/vertex.vert",
+             "/home/apachai/CLionProjects/opengl_window/fragment.frag");
+
     float        vertices[] = { 1.0f,  1.0f,  0.0f, 1.0f,  -1.0f, 0.0f,
                                 -1.0f, -1.0f, 0.0f, -1.0f, 1.0f,  0.0f };
     unsigned int indices[]  = { 0, 1, 3, 1, 2, 3 };
@@ -267,28 +394,91 @@ void engine_impl::draw_triangle()
     int vertexTimeLocation  = glGetUniformLocation(ID, "time");
     int vertexColorLocation = glGetUniformLocation(ID, "resol");
 
-    use_program();
+    s.use();
     float time = SDL_GetTicks() / 100;
     glUniform1f(vertexTimeLocation, 3.14159 * time / 8);
     glUniform2f(vertexColorLocation, eng::width, eng::height);
-    glBindVertexArray(VAO);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    OM_GL_CHECK()
-    glBindVertexArray(0);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
     OM_GL_CHECK()
 }
-eng::engine* eng::create_engine()
+bool engine_impl::draw_texture(eng::triangle t1,
+                               eng::triangle t2,
+                               int           texHandle,
+                               glm::mat4     transform)
+{
+
+    Shader s("vertex.vert", "fragment.frag");
+
+    eng::vertex vertices[] = {
+        t1.v[0],
+        t1.v[1],
+        t1.v[2],
+        t2.v[0],
+    };
+    unsigned int indices[] = {
+        0, 1, 3, // first triangle
+        1, 2, 3  // second triangle
+    };
+    unsigned int VBO, VAO, EBO;
+    glGenVertexArrays(1, &VAO);
+    glGenBuffers(1, &VBO);
+    glGenBuffers(1, &EBO);
+
+    glBindVertexArray(VAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBufferData(
+        GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+    // position attribute
+    glVertexAttribPointer(
+        0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // color attribute
+    glVertexAttribPointer(1,
+                          3,
+                          GL_FLOAT,
+                          GL_FALSE,
+                          8 * sizeof(float),
+                          (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    // texture coord attribute
+    glVertexAttribPointer(2,
+                          2,
+                          GL_FLOAT,
+                          GL_FALSE,
+                          8 * sizeof(float),
+                          (void*)(6 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    s.use();
+
+    glBindTexture(GL_TEXTURE_2D, texHandle);
+    glActiveTexture(GL_TEXTURE0);
+    s.setInt("ourTexture", 0);
+    s.setMat4("transform", transform);
+    OM_GL_CHECK()
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    glDeleteVertexArrays(1, &VAO);
+    glDeleteBuffers(1, &VBO);
+    glDeleteBuffers(1, &EBO);
+    return true;
+}
+
+engine* create_engine()
 {
     if (already_exist)
     {
         throw std::runtime_error("engine already exist");
     }
-    eng::engine* result = new engine_impl();
-    already_exist       = true;
+    engine* result = new engine_impl();
+    already_exist  = true;
     return result;
 }
 
-void eng::destroy_engine(eng::engine* e)
+void destroy_engine(engine* e)
 {
     if (already_exist == false)
     {
@@ -299,6 +489,50 @@ void eng::destroy_engine(eng::engine* e)
         throw std::runtime_error("e is nullptr");
     }
     delete e;
+}
+bool engine_impl::get_input(eng::event& e)
+{
+    SDL_Event event;
+    if (SDL_PollEvent(&event))
+    {
+        if (event.type == SDL_EVENT_QUIT)
+        {
+            std::cout << "Goodbye :) " << std::endl;
+            atexit(SDL_Quit);
+            exit(0);
+        }
+        if (event.type == SDL_EVENT_KEY_DOWN)
+        {
+            auto it =
+                std::find_if(binded_keys.begin(),
+                             binded_keys.end(),
+                             [&](const CKeys& k)
+                             { return k.get_code() == event.key.keysym.sym; });
+            if (it == binded_keys.end())
+            {
+                return true;
+            }
+            e = it->get_event();
+            std::cout << it->get_name() << " Key Down" << std::endl;
+            return true;
+        }
+        if (event.type == SDL_EVENT_KEY_UP)
+        {
+            auto it =
+                std::find_if(binded_keys.begin(),
+                             binded_keys.end(),
+                             [&](const CKeys& k)
+                             { return k.get_code() == event.key.keysym.sym; });
+            if (it == binded_keys.end())
+            {
+                return true;
+            }
+            e = it->get_event();
+            std::cout << it->get_name() << " Key Released" << std::endl;
+            return true;
+        }
+    }
+    return false;
 }
 static const char* source_to_strv(GLenum source)
 {
@@ -390,3 +624,4 @@ callback_opengl_debug(GLenum                       source,
         std::cerr.write(buff.data(), num_chars);
     }
 }
+} // namespace eng

@@ -1,14 +1,19 @@
 #version 320 es
+
 precision mediump float;
 layout (location = 0) in vec3 aPos;
-uniform float time;
-mat2 rotate2d(float _angle) {
-    return mat2(cos(_angle), -sin(_angle),
-                sin(_angle), cos(_angle));
-}
+layout (location = 1) in vec3 aColor;
+layout (location = 2) in vec2 aTexPos;
+
+out vec3 ourColor;
+out vec2 TexCoord;
+
+uniform mat4 transform;
+
 void main()
 {
-    vec2 st = vec2(aPos.x, aPos.y);
-    st = rotate2d(time) * st;
-    gl_Position = vec4(st, aPos.z, 1.0);
+    gl_Position = transform * vec4(aPos, 1.0);
+    ourColor = aColor;
+    TexCoord = aTexPos;
+
 }
